@@ -7,12 +7,12 @@ use std::{
 };
 use tracing::debug;
 
-pub(crate) fn default_status_options() -> StatusOptions {
+pub(crate) fn default_status_options(support_submodules: bool) -> StatusOptions {
     let mut opts = StatusOptions::new();
     opts.include_untracked(true)
         .recurse_untracked_dirs(true)
         .include_unmodified(true)
-        .exclude_submodules(true);
+        .exclude_submodules(!support_submodules);
     opts
 }
 
@@ -83,6 +83,7 @@ impl GitStatusCache {
     pub fn git_status_for_paths<TPath: AsRef<Path> + Debug>(
         repo: &Repository,
         paths: &[TPath],
+        support_submodules: bool,
     ) -> Result<Self> {
         if paths.is_empty() {
             return Ok(Self(AHashMap::new()));
@@ -105,7 +106,7 @@ impl GitStatusCache {
             return Ok(Self(map));
         }
 
-        let mut status_options = default_status_options();
+        let mut status_options = default_status_options(support_submodules);
         for path in paths {
             status_options.pathspec(path.as_ref().strip_prefix(&workdir)?);
         }
@@ -226,7 +227,7 @@ mod tests {
 
         let repo = Repository::open(&base).unwrap();
         let paths: Vec<PathBuf> = names.iter().map(|n| base.join(n)).collect();
-        let cache = GitStatusCache::git_status_for_paths(&repo, &paths).unwrap();
+        let cache = GitStatusCache::git_status_for_paths(&repo, &paths, true).unwrap();
 
         for (n, abs) in names.iter().zip(paths.iter()) {
             let status = cache.lookup_status(abs);

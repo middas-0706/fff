@@ -449,6 +449,10 @@ pub struct FilePickerOptions {
     pub cache_budget: Option<ContentCacheBudget>,
     /// When `false`, `new_with_shared_state` skips the background file watcher.
     pub watch: bool,
+    /// When `true` (default), submodule directories are walked and their
+    /// statuses are reported by libgit2. When `false`, submodule paths are
+    /// skipped during traversal and excluded from git status.
+    pub support_submodules: bool,
 }
 
 impl Default for FilePickerOptions {
@@ -460,6 +464,7 @@ impl Default for FilePickerOptions {
             mode: FFFMode::default(),
             cache_budget: None,
             watch: true,
+            support_submodules: true,
         }
     }
 }
@@ -476,6 +481,7 @@ pub struct FilePicker {
     enable_mmap_cache: bool,
     enable_content_indexing: bool,
     watch: bool,
+    support_submodules: bool,
 }
 
 impl std::fmt::Debug for FilePicker {
@@ -527,6 +533,10 @@ impl FilePicker {
 
     pub fn has_watcher(&self) -> bool {
         self.watch
+    }
+
+    pub fn has_submodule_support(&self) -> bool {
+        self.support_submodules
     }
 
     pub fn mode(&self) -> FFFMode {
@@ -722,6 +732,7 @@ impl FilePicker {
             enable_mmap_cache: options.enable_mmap_cache,
             enable_content_indexing: options.enable_content_indexing,
             watch: options.watch,
+            support_submodules: options.support_submodules,
         })
     }
 
@@ -745,6 +756,7 @@ impl FilePicker {
         let warmup = picker.enable_mmap_cache;
         let content_indexing = picker.enable_content_indexing;
         let watch = picker.watch;
+        let support_submodules = picker.support_submodules;
         let mode = picker.mode;
 
         let signals = picker.scan_signals();
@@ -773,6 +785,7 @@ impl FilePicker {
                 watch,
                 auto_cache_budget: true,
                 install_watcher: true,
+                support_submodules,
             },
         )
         .spawn();
@@ -793,7 +806,10 @@ impl FilePicker {
         self.scanned_files_count.store(0, Ordering::Relaxed);
 
         let git_workdir = FileSync::discover_git_workdir(&self.base_path);
-        let git_handle = git_workdir.clone().map(FileSync::spawn_git_status);
+        let support_submodules = self.support_submodules;
+        let git_handle = git_workdir
+            .clone()
+            .map(|wd| FileSync::spawn_git_status(wd, support_submodules));
 
         let empty_frecency = SharedFrecency::default();
         let sync = FileSync::walk_filesystem(
@@ -802,6 +818,7 @@ impl FilePicker {
             &self.scanned_files_count,
             &empty_frecency,
             self.mode,
+            self.support_submodules,
         )?;
 
         self.sync_data = sync;
@@ -847,6 +864,7 @@ impl FilePicker {
             shared_picker.clone(),
             shared_frecency.clone(),
             self.mode,
+            self.support_submodules,
         )?;
         self.background_watcher = Some(watcher);
         self.signals.watcher_ready.store(true, Ordering::Release);
@@ -1783,11 +1801,14 @@ impl FileSync {
         git_workdir
     }
 
-    pub(crate) fn spawn_git_status(git_workdir: PathBuf) -> JoinHandle<Option<GitStatusCache>> {
+    pub(crate) fn spawn_git_status(
+        git_workdir: PathBuf,
+        support_submodules: bool,
+    ) -> JoinHandle<Option<GitStatusCache>> {
         std::thread::spawn(move || {
             GitStatusCache::read_git_status(
                 Some(git_workdir.as_path()),
-                &mut crate::git::default_status_options(),
+                &mut crate::git::default_status_options(support_submodules),
             )
         })
     }
@@ -1801,6 +1822,7 @@ impl FileSync {
         synced_files_count: &Arc<AtomicUsize>,
         shared_frecency: &SharedFrecency,
         mode: FFFMode,
+        support_submodules: bool,
     ) -> Result<FileSync, Error> {
         use ignore::WalkBuilder;
 
@@ -1824,6 +1846,20 @@ impl FileSync {
 
         if !is_git_repo && let Some(overrides) = non_git_repo_overrides(base_path) {
             walk_builder.overrides(overrides);
+        }
+
+        // When submodule support is disabled, collect submodule absolute paths
+        // up-front and prune them from the walk via filter_entry. We resolve
+        // each submodule path relative to its containing repository workdir
+        // (which may itself be a submodule) so nested setups work.
+        if !support_submodules && let Some(workdir) = git_workdir.as_ref() {
+            let submodule_paths = collect_submodule_paths(workdir);
+            if !submodule_paths.is_empty() {
+                debug!(count = submodule_paths.len(), "Skipping submodule paths");
+                walk_builder.filter_entry(move |entry| {
+                    !submodule_paths.iter().any(|p| entry.path() == p.as_path())
+                });
+            }
         }
 
         let walker = walk_builder.build_parallel();
@@ -1980,6 +2016,34 @@ impl FileSync {
             chunked_paths: Some(Arc::new(chunked_paths)),
         })
     }
+}
+
+/// Resolve every submodule registered under `workdir` to its absolute on-disk
+/// path. Includes nested submodules by descending into each submodule's own
+/// repository when it is initialized. Returns normalized paths suitable for
+/// equality comparison against `WalkBuilder` entries.
+fn collect_submodule_paths(workdir: &Path) -> Vec<PathBuf> {
+    let Ok(repo) = Repository::open(workdir) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    let mut stack: Vec<(Repository, PathBuf)> = vec![(repo, workdir.to_path_buf())];
+    while let Some((repo, root)) = stack.pop() {
+        let Ok(submodules) = repo.submodules() else {
+            continue;
+        };
+        for sm in submodules {
+            let abs = root.join(sm.path());
+            let abs = crate::path_utils::normalize(abs);
+            // Recurse into initialized submodules so nested ones are found too.
+            if let Ok(sub_repo) = sm.open() {
+                stack.push((sub_repo, abs.clone()));
+            }
+            out.push(abs);
+        }
+    }
+    out
 }
 
 /// This does both thing (yes sorry all the OOP morons)

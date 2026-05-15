@@ -57,13 +57,27 @@ pub(crate) struct ScanSignals {
 }
 
 /// Which optional phases a scan should run.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub(crate) struct ScanConfig {
     pub(crate) warmup: bool,
     pub(crate) content_indexing: bool,
     pub(crate) watch: bool,
     pub(crate) auto_cache_budget: bool,
     pub(crate) install_watcher: bool,
+    pub(crate) support_submodules: bool,
+}
+
+impl Default for ScanConfig {
+    fn default() -> Self {
+        Self {
+            warmup: false,
+            content_indexing: false,
+            watch: false,
+            auto_cache_budget: false,
+            install_watcher: false,
+            support_submodules: true,
+        }
+    }
 }
 
 /// A fully-configured scan job ready to run on a background thread.
@@ -112,6 +126,7 @@ impl ScanJob {
             watch: picker.has_watcher(),
             auto_cache_budget: !picker.has_explicit_cache_budget(),
             install_watcher: false, // the watcher is independent of rescan, it is not restarting EVER
+            support_submodules: picker.has_submodule_support(),
         };
 
         drop(guard); // just a sanity check
@@ -175,13 +190,16 @@ impl ScanJob {
 
         // 1. Start git discovery and walk filesystem off-lock.
         let git_workdir = FileSync::discover_git_workdir(&base_path);
-        let status_handle = git_workdir.clone().map(FileSync::spawn_git_status);
+        let status_handle = git_workdir
+            .clone()
+            .map(|wd| FileSync::spawn_git_status(wd, config.support_submodules));
         let sync = match FileSync::walk_filesystem(
             &base_path,
             git_workdir.clone(),
             &scanned_files_counter,
             &shared_frecency,
             mode,
+            config.support_submodules,
         ) {
             Ok(sync) => sync,
             Err(e) => {
@@ -235,6 +253,7 @@ impl ScanJob {
                 shared_picker.clone(),
                 shared_frecency.clone(),
                 mode,
+                config.support_submodules,
             ) {
                 Ok(watcher) => {
                     if let Ok(mut guard) = shared_picker.write()

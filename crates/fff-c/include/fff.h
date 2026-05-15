@@ -379,6 +379,10 @@ struct FffResult *fff_create_instance(const char *base_path,
  * * `frecency_db_path`            – frecency LMDB database path (NULL/empty to skip)
  * * `history_db_path`             – query history LMDB database path (NULL/empty to skip)
  * * `use_unsafe_no_lock`          – **deprecated, ignored.** Previously enabled
+ *   `MDB_NOLOCK|MDB_NOSYNC|MDB_NOMETASYNC` for LMDB; benchmarks showed no
+ *   measurable win under realistic contention, so the flag is now a no-op.
+ *   The parameter remains in the signature for ABI compatibility and will be
+ *   removed in a future release.
  * * `enable_mmap_cache`           – pre-populate mmap caches after the initial scan
  * * `enable_content_indexing`     – build content index after the initial scan
  * * `watch`                       – start a background file-system watcher for live updates
@@ -412,6 +416,32 @@ struct FffResult *fff_create_instance2(const char *base_path,
                                        uint64_t cache_budget_max_files,
                                        uint64_t cache_budget_max_bytes,
                                        uint64_t cache_budget_max_file_size);
+
+/**
+ * Create a new file finder instance (v3, with submodule support toggle).
+ *
+ * Identical to [`fff_create_instance2`] except for the trailing
+ * `support_submodules` flag. When `true` (recommended default), submodule
+ * directories are walked and reported in git status. When `false`, submodule
+ * paths are skipped during traversal and excluded from git status.
+ *
+ * ## Safety
+ * String parameters must be valid null-terminated UTF-8 or NULL.
+ */
+struct FffResult *fff_create_instance3(const char *base_path,
+                                       const char *frecency_db_path,
+                                       const char *history_db_path,
+                                       bool _use_unsafe_no_lock,
+                                       bool enable_mmap_cache,
+                                       bool enable_content_indexing,
+                                       bool watch,
+                                       bool ai_mode,
+                                       const char *log_file_path,
+                                       const char *log_level,
+                                       uint64_t cache_budget_max_files,
+                                       uint64_t cache_budget_max_bytes,
+                                       uint64_t cache_budget_max_file_size,
+                                       bool support_submodules);
 
 /**
  * Destroy a file finder instance and free all its resources.

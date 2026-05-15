@@ -57,7 +57,10 @@ pub fn destroy_query_db(_: &Lua, _: ()) -> LuaResult<bool> {
     Ok(QUERY_TRACKER.destroy().into_lua_result()?.is_some())
 }
 
-pub fn init_file_picker(_: &Lua, base_path: String) -> LuaResult<bool> {
+pub fn init_file_picker(
+    _: &Lua,
+    (base_path, support_submodules): (String, Option<bool>),
+) -> LuaResult<bool> {
     {
         let guard = FILE_PICKER.read().into_lua_result()?;
         if guard.is_some() {
@@ -73,6 +76,7 @@ pub fn init_file_picker(_: &Lua, base_path: String) -> LuaResult<bool> {
             enable_mmap_cache: true,
             enable_content_indexing: true,
             mode: FFFMode::Neovim,
+            support_submodules: support_submodules.unwrap_or(true),
             ..Default::default()
         },
     )
@@ -87,18 +91,21 @@ fn reinit_file_picker_internal(path: &Path) -> Result<(), Error> {
     // to exit on its next tick without joining), so it's safe under
     // the lock. In-flight watcher handlers finish naturally once we
     // release the guard.
-    {
+    let prev_support_submodules = {
         let mut guard = FILE_PICKER.write()?;
+        // Don't take() the picker here — leave the old one in place so
+        // searches still work until new_with_shared_state replaces it.
         if let Some(ref mut picker) = *guard {
             // Signal cancellation BEFORE stopping the watcher so any
             // orphaned scan/post-scan threads discard their results
             // instead of racing with the new picker.
             picker.cancel();
             picker.stop_background_monitor();
+            picker.has_submodule_support()
+        } else {
+            true
         }
-        // Don't take() the picker here — leave the old one in place so
-        // searches still work until new_with_shared_state replaces it.
-    }
+    };
 
     // Create new picker — this atomically replaces the old one via write lock
     FilePicker::new_with_shared_state(
@@ -109,6 +116,7 @@ fn reinit_file_picker_internal(path: &Path) -> Result<(), Error> {
             enable_mmap_cache: true,
             enable_content_indexing: true,
             mode: FFFMode::Neovim,
+            support_submodules: prev_support_submodules,
             ..Default::default()
         },
     )?;

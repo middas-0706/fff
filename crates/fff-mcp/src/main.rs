@@ -149,6 +149,11 @@ pub(crate) struct Args {
     #[arg(long = "no-watch")]
     no_watch: bool,
 
+    /// Skip git submodule directories during traversal and exclude them
+    /// from git status. Default: submodules are walked and reported.
+    #[arg(long = "no-submodules")]
+    no_submodules: bool,
+
     /// Maximum number of files whose content is kept persistently in memory.
     /// Files beyond this limit are still searchable via temporary mmaps that
     /// are released after each grep. Defaults to 30 000.
@@ -269,6 +274,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cache_budget: args
                 .max_cached_files
                 .map(fff::ContentCacheBudget::new_for_repo),
+            support_submodules: !args.no_submodules,
         },
     )
     .map_err(|e| format!("Failed to init file picker: {}", e))?;

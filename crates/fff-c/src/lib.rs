@@ -270,6 +270,121 @@ pub unsafe extern "C" fn fff_create_instance2(
             watch,
             mode,
             cache_budget,
+            support_submodules: true,
+        },
+    ) {
+        return FffResult::err(&format!("Failed to init file picker: {}", e));
+    }
+
+    let instance = Box::new(FffInstance {
+        picker: shared_picker,
+        frecency: shared_frecency,
+        query_tracker,
+    });
+
+    let fff_handle = Box::into_raw(instance) as *mut c_void;
+    FffResult::ok_handle(fff_handle)
+}
+
+/// Create a new file finder instance (v3, with submodule support toggle).
+///
+/// Identical to [`fff_create_instance2`] except for the trailing
+/// `support_submodules` flag. When `true` (recommended default), submodule
+/// directories are walked and reported in git status. When `false`, submodule
+/// paths are skipped during traversal and excluded from git status.
+///
+/// ## Safety
+/// String parameters must be valid null-terminated UTF-8 or NULL.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn fff_create_instance3(
+    base_path: *const c_char,
+    frecency_db_path: *const c_char,
+    history_db_path: *const c_char,
+    _use_unsafe_no_lock: bool,
+    enable_mmap_cache: bool,
+    enable_content_indexing: bool,
+    watch: bool,
+    ai_mode: bool,
+    log_file_path: *const c_char,
+    log_level: *const c_char,
+    cache_budget_max_files: u64,
+    cache_budget_max_bytes: u64,
+    cache_budget_max_file_size: u64,
+    support_submodules: bool,
+) -> *mut FffResult {
+    let base_path_str = match unsafe { cstr_to_str(base_path) } {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => return FffResult::err("base_path is null or empty"),
+    };
+
+    if let Some(log_path) = unsafe { optional_cstr(log_file_path) } {
+        let level = unsafe { optional_cstr(log_level) };
+        if let Err(e) = fff::log::init_tracing(log_path, level) {
+            return FffResult::err(&format!("Failed to init tracing: {}", e));
+        }
+    }
+
+    let frecency_path = unsafe { optional_cstr(frecency_db_path) }.map(|s| s.to_string());
+    let history_path = unsafe { optional_cstr(history_db_path) }.map(|s| s.to_string());
+
+    let shared_picker = SharedFilePicker::default();
+    let shared_frecency = SharedFrecency::default();
+    let query_tracker = SharedQueryTracker::default();
+
+    if let Some(ref frecency_path) = frecency_path {
+        if let Some(parent) = PathBuf::from(frecency_path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        match FrecencyTracker::open(frecency_path) {
+            Ok(tracker) => {
+                if let Err(e) = shared_frecency.init(tracker) {
+                    return FffResult::err(&format!("Failed to acquire frecency lock: {}", e));
+                }
+            }
+            Err(e) => return FffResult::err(&format!("Failed to init frecency db: {}", e)),
+        }
+    }
+
+    if let Some(ref history_path) = history_path {
+        if let Some(parent) = PathBuf::from(history_path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        match QueryTracker::open(history_path) {
+            Ok(tracker) => {
+                if let Err(e) = query_tracker.init(tracker) {
+                    return FffResult::err(&format!("Failed to acquire query tracker lock: {}", e));
+                }
+            }
+            Err(e) => return FffResult::err(&format!("Failed to init query tracker db: {}", e)),
+        }
+    }
+
+    let mode = if ai_mode {
+        FFFMode::Ai
+    } else {
+        FFFMode::Neovim
+    };
+
+    let cache_budget = fff::ContentCacheBudget::from_overrides(
+        cache_budget_max_files as usize,
+        cache_budget_max_bytes,
+        cache_budget_max_file_size,
+    );
+
+    if let Err(e) = FilePicker::new_with_shared_state(
+        shared_picker.clone(),
+        shared_frecency.clone(),
+        fff::FilePickerOptions {
+            base_path: base_path_str,
+            enable_mmap_cache,
+            enable_content_indexing,
+            watch,
+            mode,
+            cache_budget,
+            support_submodules,
         },
     ) {
         return FffResult::err(&format!("Failed to init file picker: {}", e));
@@ -901,19 +1016,27 @@ pub unsafe extern "C" fn fff_restart_index(
         Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
     };
 
-    let (warmup_caches, content_indexing, watch, mode) = if let Some(mut picker) = guard.take() {
-        let warmup = picker.has_mmap_cache();
-        let enable_content_indexing = picker.has_content_indexing();
-        let watch = picker.has_watcher();
-        let mode = picker.mode();
+    let (warmup_caches, content_indexing, watch, mode, support_submodules) =
+        if let Some(mut picker) = guard.take() {
+            let warmup = picker.has_mmap_cache();
+            let enable_content_indexing = picker.has_content_indexing();
+            let watch = picker.has_watcher();
+            let mode = picker.mode();
+            let support_submodules = picker.has_submodule_support();
 
-        picker.stop_background_monitor();
+            picker.stop_background_monitor();
 
-        (warmup, enable_content_indexing, watch, mode)
-    } else {
-        // this is error state anyway
-        (false, true, true, FFFMode::default())
-    };
+            (
+                warmup,
+                enable_content_indexing,
+                watch,
+                mode,
+                support_submodules,
+            )
+        } else {
+            // this is error state anyway
+            (false, true, true, FFFMode::default(), true)
+        };
 
     drop(guard);
 
@@ -927,6 +1050,7 @@ pub unsafe extern "C" fn fff_restart_index(
             watch,
             mode,
             cache_budget: None,
+            support_submodules,
         },
     ) {
         Ok(()) => FffResult::ok_empty(),

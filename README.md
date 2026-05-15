@@ -256,6 +256,7 @@ require('fff').setup({
   },
   git = {
     status_text_color = false, -- true to color filenames by git status
+    support_submodules = true, -- walk into submodules and report their git status; set false to skip them
   },
   grep = {
     max_file_size = 10 * 1024 * 1024,
