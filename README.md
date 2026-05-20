@@ -209,7 +209,11 @@ require('fff').setup({
     flex = { size = 130, wrap = 'top' },
     show_scrollbar = true,
     path_shorten_strategy = 'middle_number', -- 'middle_number' | 'middle' | 'end' | 'start'
-    dir_position = 'left',        -- 'left' | 'right' (right-aligns directory column for readability)
+    -- 'left'  : `filename dir/path`
+    -- 'right' : `filename                                   dir/path`
+    -- Filename always renders in full; on overflow the directory column is
+    -- shrunk by `path_shorten_strategy` to fit available space.
+    dir_position = 'left',        -- 'left' | 'right'
     anchor = 'center',
   },
   preview = {
