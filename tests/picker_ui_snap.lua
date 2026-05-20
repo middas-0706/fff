@@ -181,6 +181,23 @@ T['combo']['boost_top'] = function()
   assert_snapshot_match()
 end
 
+T['dir_position'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function() setup({ cols = 140, rows = 32 }) end,
+    post_case = teardown,
+  },
+})
+
+T['dir_position']['right'] = function()
+  child.lua([[
+    local conf = require('fff.conf')
+    local cfg = conf.get()
+    cfg.layout.dir_position = 'right'
+  ]])
+  open_picker('bottom')
+  assert_snapshot_match()
+end
+
 T['scrollbar'] = MiniTest.new_set({
   hooks = {
     pre_case = function() setup({ cols = 140, rows = 32 }) end,
