@@ -37,6 +37,12 @@ irm https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.ps
 
 The scripts live at [`install-mcp.sh`](./install-mcp.sh) and [`install-mcp.ps1`](./install-mcp.ps1) if you want to read them first.
 
+> **Note**: If you hit GitHub API rate limiting (403 errors), set `GITHUB_TOKEN` with a [personal access token](https://github.com/settings/tokens) to get 5000 requests/hour instead of 60:
+> ```bash
+> export GITHUB_TOKEN=ghp_your_token_here
+> curl -L https://dmtrkovalenko.dev/install-fff-mcp.sh | bash
+> ```
+
 It prints the exact wiring instructions for your client. Once the server is connected, ask the agent to "use fff" and it picks up the `ffgrep`, `fffind`, and `fff-multi-grep` tools.
 
 ### Recommended agent prompt
